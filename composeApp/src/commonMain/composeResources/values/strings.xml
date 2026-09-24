@@ -19,6 +19,7 @@
     <string name="run">Run</string>
     <string name="value">Value</string>
     <string name="formatted_value">Formatted value</string>
+    <string name="remark">Remark</string>
     <string name="actions">Actions</string>
     <string name="read">Read</string>
     <string name="write">Write</string>

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
@@ -92,6 +93,7 @@ fun ModbusToolApp(viewModel: WorkspaceViewModel) {
                 onReadAll = { viewModel.readAll(workspace.id) },
                 onPoll = { viewModel.togglePolling(workspace.id) },
                 onPollEnabled = { action, enabled -> viewModel.setPollEnabled(workspace.id, action.id, enabled) },
+                onToggleCoil = { action, offset, enabled -> viewModel.writeCoilRow(workspace.id, action.id, offset, enabled) },
                 onScan = { dialog = AppDialog.Scan(workspace.id) },
                 onClearLog = { viewModel.clearLog(workspace.id) },
             )
@@ -214,6 +216,7 @@ private fun WorkspaceContent(
     onReadAll: () -> Unit,
     onPoll: () -> Unit,
     onPollEnabled: (ActionDefinition, Boolean) -> Unit,
+    onToggleCoil: (ActionDefinition, Int, Boolean) -> Unit,
     onScan: () -> Unit,
     onClearLog: () -> Unit,
 ) {
@@ -243,7 +246,7 @@ private fun WorkspaceContent(
             Spacer(Modifier.width(8.dp)); OutlinedButton(onClick = onScan) { Text(tr(Res.string.scan_unit_ids)) }
             Spacer(Modifier.weight(1f)); Text(runtime.status, color = Muted, fontSize = 12.sp)
         }
-        ActionResults(Modifier.weight(1f), workspace, runtime, onEditAction, onDeleteAction, onRun, onPollEnabled)
+        ActionResults(Modifier.weight(1f), workspace, runtime, onEditAction, onDeleteAction, onRun, onPollEnabled, onToggleCoil)
         Box(
             Modifier.fillMaxWidth().height(6.dp).background(Color(0xFFCBD5E1)).pointerInput(workspace.id) {
                 detectDragGestures { change, drag ->
@@ -265,6 +268,7 @@ private fun ActionResults(
     onDelete: (ActionDefinition) -> Unit,
     onRun: (ActionDefinition, Int, Int) -> Unit,
     onPollEnabled: (ActionDefinition, Boolean) -> Unit,
+    onToggleCoil: (ActionDefinition, Int, Boolean) -> Unit,
 ) {
     Column(modifier.padding(horizontal = 18.dp)) {
         Text(tr(Res.string.results), color = Muted, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
@@ -276,13 +280,14 @@ private fun ActionResults(
             Row(Modifier.fillMaxWidth().background(Color(0xFFE8EDF5), RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                 HeaderCell(tr(Res.string.run), 52.dp); HeaderCell("Fnc", 64.dp)
                 HeaderCell("Ref", 86.dp); HeaderCell("Raw", 1.1f); HeaderCell(tr(Res.string.value), .85f)
-                HeaderCell(tr(Res.string.formatted_value), 1.15f); HeaderCell(tr(Res.string.actions), 112.dp)
+                HeaderCell(tr(Res.string.formatted_value), 1.15f); HeaderCell(tr(Res.string.remark), 1f)
+                HeaderCell(tr(Res.string.actions), 112.dp)
             }
             LazyColumn(Modifier.fillMaxWidth().background(Color.White)) {
                 workspace.actions.forEach { action ->
                     val result = runtime.results[action.id] ?: ActionResult()
                     items(flatRows(action, result), key = { "${action.id}:${it.offset}" }) { row ->
-                        FlatResultRow(action, row, result.status, onEdit, onDelete, onRun, onPollEnabled)
+                        FlatResultRow(action, row, result.status, onEdit, onDelete, onRun, onPollEnabled, onToggleCoil)
                         Divider(color = Color(0xFFE2E8F0))
                     }
                 }
@@ -317,6 +322,7 @@ private fun FlatResultRow(
     onDelete: (ActionDefinition) -> Unit,
     onRun: (ActionDefinition, Int, Int) -> Unit,
     onPollEnabled: (ActionDefinition, Boolean) -> Unit,
+    onToggleCoil: (ActionDefinition, Int, Boolean) -> Unit,
 ) {
     val value = row.result
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -327,8 +333,17 @@ private fun FlatResultRow(
         }
         Text(row.reference, fontSize = 11.sp, modifier = Modifier.width(86.dp).padding(horizontal = 4.dp))
         ResultCell(value?.raw ?: "—", 1.1f)
-        ResultCell(value?.value ?: if (status == ActionRunStatus.RUNNING) "Reading…" else "—", .85f, statusColor(status))
+        if (action.function == FunctionCode.READ_COILS) {
+            CoilValueCell(
+                rawValue = value?.raw,
+                enabled = action.pollEnabled && status != ActionRunStatus.RUNNING,
+                onToggle = { onToggleCoil(action, row.offset, it) },
+            )
+        } else {
+            ResultCell(value?.value ?: if (status == ActionRunStatus.RUNNING) "Reading…" else "—", .85f, statusColor(status))
+        }
         ResultCell(value?.formattedValue ?: "—", 1.15f, statusColor(status))
+        ResultCell(action.remark.ifBlank { "—" }, 1f)
         Row(Modifier.width(112.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { onRun(action, row.offset, row.quantity) }, enabled = action.pollEnabled && status != ActionRunStatus.RUNNING, contentPadding = PaddingValues(horizontal = 5.dp)) {
                 Text(tr(if (action.function.isRead) Res.string.read else Res.string.write), fontSize = 11.sp)
@@ -342,6 +357,27 @@ private fun FlatResultRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RowScope.CoilValueCell(rawValue: String?, enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    val checked = when (rawValue) {
+        "1" -> true
+        "0" -> false
+        else -> null
+    }
+    Row(
+        modifier = Modifier.weight(.85f).padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(
+            checked = checked ?: false,
+            onCheckedChange = onToggle,
+            enabled = enabled && checked != null,
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(checked?.let { if (it) "ON" else "OFF" } ?: "—", fontSize = 11.sp, color = statusColor(if (checked == null) ActionRunStatus.IDLE else ActionRunStatus.SUCCESS))
     }
 }
 
@@ -368,10 +404,12 @@ private fun LogPanel(modifier: Modifier, logs: List<TrafficLogEntry>, onClear: (
         }
         if (logs.isEmpty()) Text(tr(Res.string.empty_log), color = Color(0xFF64748B), fontSize = 12.sp)
         else LazyColumn { items(logs.asReversed()) { entry ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                Text(entry.time, color = Color(0xFF64748B), fontSize = 11.sp, modifier = Modifier.width(92.dp))
-                Text(entry.direction, color = if (entry.direction == "TX") Color(0xFF60A5FA) else Color(0xFF34D399), fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.width(30.dp))
-                Text(if (entry.frame.isBlank()) entry.detail else "${entry.frame}  ${entry.detail}", color = if (entry.isError) Color(0xFFFCA5A5) else Color(0xFFD1D5DB), fontSize = 11.sp)
+            SelectionContainer {
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Text(entry.time, color = Color(0xFF64748B), fontSize = 11.sp, modifier = Modifier.width(92.dp))
+                    Text(entry.direction, color = if (entry.direction == "TX") Color(0xFF60A5FA) else Color(0xFF34D399), fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.width(30.dp))
+                    Text(if (entry.frame.isBlank()) entry.detail else "${entry.frame}  ${entry.detail}", color = if (entry.isError) Color(0xFFFCA5A5) else Color(0xFFD1D5DB), fontSize = 11.sp)
+                }
             }
         } }
     }
@@ -447,6 +485,7 @@ private fun ActionDialog(workspace: WorkspaceDefinition, existing: ActionDefinit
     var address by remember { mutableStateOf(initial.address.toString()) }; var quantity by remember { mutableStateOf(initial.quantity.toString()) }; var values by remember { mutableStateOf(initial.values) }
     var coil by remember { mutableStateOf(initial.singleCoil) }; var format by remember { mutableStateOf(initial.registerFormat) }; var order by remember { mutableStateOf(initial.wordOrder) }; var poll by remember { mutableStateOf(initial.pollEnabled) }
     var formula by remember { mutableStateOf(initial.valueFormula) }
+    var remark by remember { mutableStateOf(initial.remark) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(tr(if (existing == null) Res.string.add_action_title else Res.string.edit_action_title)) }, text = {
         ScrollableDialogColumn {
@@ -463,12 +502,13 @@ private fun ActionDialog(workspace: WorkspaceDefinition, existing: ActionDefinit
             }
             Field(formula, { formula = it }, tr(Res.string.formula_label))
             Text(tr(Res.string.formula_help), color = Muted, fontSize = 11.sp)
+            Field(remark, { remark = it }, tr(Res.string.remark))
             Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(poll, { poll = it }); Text(tr(Res.string.enable_action)) }
             error?.let { Text(it, color = MaterialTheme.colors.error, fontSize = 12.sp) }
         }
     }, confirmButton = { Button(onClick = { runCatching {
         if (formula.isNotBlank()) ValueFormula.evaluate(formula, 1.0).getOrThrow()
-        initial.copy(name = name.trim(), function = function, unitId = unit.toInt(), address = address.toInt(), quantity = quantity.toIntOrNull() ?: 1, values = values, singleCoil = coil, registerFormat = format, wordOrder = order, pollEnabled = poll, valueFormula = formula.trim())
+        initial.copy(name = name.trim(), function = function, unitId = unit.toInt(), address = address.toInt(), quantity = quantity.toIntOrNull() ?: 1, values = values, singleCoil = coil, registerFormat = format, wordOrder = order, pollEnabled = poll, valueFormula = formula.trim(), remark = remark.trim())
     }.onSuccess(onSave).onFailure { error = it.message ?: "Check the numeric fields." } }) { Text(tr(Res.string.save)) } }, dismissButton = { TextButton(onDismiss) { Text(tr(Res.string.cancel)) } })
 }
 

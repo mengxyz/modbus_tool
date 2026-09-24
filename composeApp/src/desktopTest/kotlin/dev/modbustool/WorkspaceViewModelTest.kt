@@ -5,6 +5,7 @@ import dev.modbustool.core.FunctionCode
 import dev.modbustool.core.ModbusTransport
 import dev.modbustool.core.TransportExchange
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -89,6 +90,42 @@ class WorkspaceViewModelTest {
         assertFalse(viewModel.state.value.runtimes.getValue(initial.id).isPolling)
         scope.cancel()
     }
+
+    @Test
+    fun togglesAReadCoilRowWithFunctionFive() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = CoilTransport()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val action = ActionDefinition(
+            id = "coil",
+            name = "Output",
+            function = FunctionCode.READ_COILS,
+            unitId = 8,
+            address = 10,
+            quantity = 1,
+        )
+        val workspace = WorkspaceDefinition(actions = listOf(action))
+        val viewModel = WorkspaceViewModel(
+            MemoryStore(WorkspaceDocument(selectedWorkspaceId = workspace.id, workspaces = listOf(workspace))),
+            { transport }, scope, dispatcher,
+        ) { emptyList() }
+
+        viewModel.connect(workspace.id)
+        advanceUntilIdle()
+        viewModel.runAction(workspace.id, action.id)
+        advanceUntilIdle()
+        assertEquals("OFF", viewModel.state.value.runtimes.getValue(workspace.id).results.getValue(action.id).rows.single().value)
+
+        viewModel.writeCoilRow(workspace.id, action.id, 0, true)
+        advanceUntilIdle()
+
+        assertContentEquals(byteArrayOf(5, 0, 10, 0xFF.toByte(), 0), transport.requests.last())
+        val result = viewModel.state.value.runtimes.getValue(workspace.id).results.getValue(action.id)
+        assertEquals("ON", result.rows.single().value)
+        assertEquals("1", result.rows.single().raw)
+        assertEquals(ActionRunStatus.SUCCESS, result.status)
+        scope.cancel()
+    }
 }
 
 private class MemoryStore(initial: WorkspaceDocument = defaultDocument()) : WorkspaceStore {
@@ -107,5 +144,25 @@ private class FakeTransport : ModbusTransport {
         exchangeCount++
         return TransportExchange(requestPdu, byteArrayOf(3, 2, 0, 42), byteArrayOf(3, 2, 0, 42), 2)
     }
+    override suspend fun disconnect() { mutableState.value = ConnectionState.DISCONNECTED }
+}
+
+private class CoilTransport : ModbusTransport {
+    private val mutableState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    override val connectionState: StateFlow<ConnectionState> = mutableState
+    val requests = mutableListOf<ByteArray>()
+
+    override suspend fun connect() { mutableState.value = ConnectionState.CONNECTED }
+
+    override suspend fun transact(unitId: Int, requestPdu: ByteArray, timeoutMillis: Int?): TransportExchange {
+        requests += requestPdu.copyOf()
+        val response = when (requestPdu.first().toInt() and 0xFF) {
+            1 -> byteArrayOf(1, 1, 0)
+            5 -> requestPdu.copyOf()
+            else -> error("Unexpected function")
+        }
+        return TransportExchange(requestPdu, response, response, 2)
+    }
+
     override suspend fun disconnect() { mutableState.value = ConnectionState.DISCONNECTED }
 }

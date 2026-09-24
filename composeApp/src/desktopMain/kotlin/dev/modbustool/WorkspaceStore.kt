@@ -47,6 +47,7 @@ data class ActionDefinition(
     val wordOrder: WordOrder = WordOrder.HIGH_WORD_FIRST,
     val pollEnabled: Boolean = true,
     val valueFormula: String = "",
+    val remark: String = "",
 )
 
 @Serializable

@@ -8,7 +8,7 @@ Modbus Tool is a Kotlin Multiplatform desktop client for inspecting and controll
 - One-shot requests and repeated read polling
 - Serial RTU settings for port, baud rate, parity, stop bits, unit ID, and timeout
 - TCP and UDP endpoints with hostname resolution and response validation
-- Unsigned, signed, hexadecimal, 32-bit integer, and float register views
+- Unsigned and signed 16-, 24-, and 32-bit integer formats, plus hexadecimal and float register views
 - High-word-first and low-word-first 32-bit ordering
 - Raw TX/RX traffic log and zero-based/reference address display
 - Automatic restoration of the last workspace

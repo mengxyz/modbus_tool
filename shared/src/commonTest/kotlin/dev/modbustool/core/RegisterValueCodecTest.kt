@@ -21,6 +21,36 @@ class RegisterValueCodecTest {
     }
 
     @Test
+    fun decodesUnsigned24WithBothWordOrders() {
+        assertEquals(
+            "11259375",
+            RegisterValueCodec.decode(listOf(0x00AB, 0xCDEF), RegisterFormat.UNSIGNED_24, WordOrder.HIGH_WORD_FIRST).single().displayValue,
+        )
+        assertEquals(
+            "11259375",
+            RegisterValueCodec.decode(listOf(0xCDEF, 0x00AB), RegisterFormat.UNSIGNED_24, WordOrder.LOW_WORD_FIRST).single().displayValue,
+        )
+        assertEquals(
+            listOf(0x00AB, 0xCDEF),
+            RegisterValueCodec.encode(listOf("11259375"), RegisterFormat.UNSIGNED_24, WordOrder.HIGH_WORD_FIRST).getOrThrow(),
+        )
+        assertEquals(
+            listOf(0xCDEF, 0x00AB),
+            RegisterValueCodec.encode(listOf("11259375"), RegisterFormat.UNSIGNED_24, WordOrder.LOW_WORD_FIRST).getOrThrow(),
+        )
+    }
+
+    @Test
+    fun roundTripsSigned24BoundariesWithBothWordOrders() {
+        WordOrder.entries.forEach { order ->
+            listOf("-8388608", "-1", "0", "8388607").forEach { input ->
+                val encoded = RegisterValueCodec.encode(listOf(input), RegisterFormat.SIGNED_24, order).getOrThrow()
+                assertEquals(input, RegisterValueCodec.decode(encoded, RegisterFormat.SIGNED_24, order).single().displayValue)
+            }
+        }
+    }
+
+    @Test
     fun reportsIncompletePair() {
         val decoded = RegisterValueCodec.decode(listOf(1), RegisterFormat.UNSIGNED_32, WordOrder.HIGH_WORD_FIRST)
         assertTrue(decoded.single().displayValue.startsWith("Incomplete"))
@@ -29,5 +59,7 @@ class RegisterValueCodecTest {
     @Test
     fun rejectsUnsignedOverflow() {
         assertTrue(RegisterValueCodec.encode(listOf("65536"), RegisterFormat.UNSIGNED_16, WordOrder.HIGH_WORD_FIRST).isFailure)
+        assertTrue(RegisterValueCodec.encode(listOf("16777216"), RegisterFormat.UNSIGNED_24, WordOrder.HIGH_WORD_FIRST).isFailure)
+        assertTrue(RegisterValueCodec.encode(listOf("8388608"), RegisterFormat.SIGNED_24, WordOrder.HIGH_WORD_FIRST).isFailure)
     }
 }

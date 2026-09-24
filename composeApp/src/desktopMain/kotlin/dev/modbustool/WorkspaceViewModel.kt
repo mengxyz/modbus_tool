@@ -250,6 +250,27 @@ class WorkspaceViewModel(
         }
     }
 
+    fun writeCoilRow(workspaceId: String, actionId: String, offset: Int, enabled: Boolean) {
+        val action = currentWorkspace(workspaceId)?.actions?.firstOrNull { it.id == actionId } ?: return
+        if (action.function != FunctionCode.READ_COILS) {
+            showError(workspaceId, "Only readable coils can be toggled")
+            return
+        }
+        if (offset !in 0 until action.quantity || action.address + offset > 65_535) {
+            showError(workspaceId, "Invalid coil address")
+            return
+        }
+        val session = sessions[workspaceId] ?: run { showError(workspaceId, "Connect this workspace first"); return }
+        scope.launch {
+            session.manualPending.incrementAndGet()
+            try {
+                session.requestMutex.withLock { performCoilWrite(workspaceId, action, offset, enabled, session) }
+            } finally {
+                session.manualPending.decrementAndGet()
+            }
+        }
+    }
+
     fun readAll(workspaceId: String) {
         val actions = currentWorkspace(workspaceId)?.actions?.filter { it.function.isRead && it.pollEnabled }.orEmpty()
         val session = sessions[workspaceId] ?: run { showError(workspaceId, "Connect this workspace first"); return }
@@ -380,6 +401,58 @@ class WorkspaceViewModel(
                 updateRuntime(workspaceId) { it.copy(
                     connectionState = session.transport.connectionState.value,
                     status = if (outcome.kind == FailureKind.TIMEOUT) "Response timed out" else "Request failed", error = outcome.message,
+                ) }
+            }
+        }
+    }
+
+    private suspend fun performCoilWrite(
+        workspaceId: String,
+        action: ActionDefinition,
+        offset: Int,
+        enabled: Boolean,
+        session: Session,
+    ) {
+        val previous = runtime(workspaceId).results[action.id] ?: ActionResult()
+        updateResult(workspaceId, action.id, previous.copy(status = ActionRunStatus.RUNNING, summary = "Writing coil…"))
+        val address = action.address + offset
+        when (val outcome = session.client.execute(action.unitId, WriteSingleCoilRequest(address, enabled))) {
+            is ModbusOutcome.Success -> {
+                addExchangeLogs(workspaceId, outcome.exchange.requestFrame, outcome.exchange.responseFrame, "${outcome.exchange.elapsedMillis} ms")
+                val display = if (enabled) "ON" else "OFF"
+                val updated = row(
+                    FunctionCode.READ_COILS,
+                    address,
+                    1,
+                    if (enabled) "1" else "0",
+                    display,
+                    formatValue(action, if (enabled) 1.0 else 0.0, display),
+                )
+                val rows = (previous.rows.filterNot { it.reference == updated.reference } + updated)
+                    .sortedBy { it.address.substringBefore('–').toIntOrNull() }
+                updateResult(workspaceId, action.id, ActionResult(
+                    ActionRunStatus.SUCCESS,
+                    "Coil ${updated.reference} set to $display · ${outcome.exchange.elapsedMillis} ms",
+                    rows,
+                    now(),
+                    outcome.exchange.elapsedMillis,
+                ))
+                updateRuntime(workspaceId) { it.copy(status = "Coil ${updated.reference} set to $display", error = null) }
+            }
+            is ModbusOutcome.DeviceException -> {
+                addExchangeLogs(workspaceId, outcome.exchange.requestFrame, outcome.exchange.responseFrame, "Exception ${outcome.code}: ${outcome.description}", true)
+                updateResult(workspaceId, action.id, previous.copy(status = ActionRunStatus.ERROR, summary = "Exception ${outcome.code}: ${outcome.description}", updatedAt = now()))
+                updateRuntime(workspaceId) { it.copy(status = "Coil write failed", error = outcome.description) }
+            }
+            is ModbusOutcome.Failure -> {
+                outcome.requestFrame?.let { addLog(workspaceId, "TX", it, "Coil write") }
+                outcome.responseFrame?.let { addLog(workspaceId, "RX", it, outcome.message, true) }
+                if (outcome.requestFrame == null && outcome.responseFrame == null) addMessageLog(workspaceId, outcome.message)
+                updateResult(workspaceId, action.id, previous.copy(status = ActionRunStatus.ERROR, summary = outcome.message, updatedAt = now()))
+                updateRuntime(workspaceId) { it.copy(
+                    connectionState = session.transport.connectionState.value,
+                    status = "Coil write failed",
+                    error = outcome.message,
                 ) }
             }
         }

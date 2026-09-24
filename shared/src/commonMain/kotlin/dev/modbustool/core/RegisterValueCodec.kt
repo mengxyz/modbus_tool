@@ -1,12 +1,14 @@
 package dev.modbustool.core
 
-enum class RegisterFormat(val label: String, val wordsPerValue: Int) {
-    UNSIGNED_16("Unsigned 16-bit", 1),
-    SIGNED_16("Signed 16-bit", 1),
-    HEX_16("Hex 16-bit", 1),
-    UNSIGNED_32("Unsigned 32-bit", 2),
-    SIGNED_32("Signed 32-bit", 2),
-    FLOAT_32("Float 32-bit", 2),
+enum class RegisterFormat(val label: String, val wordsPerValue: Int, val bitWidth: Int) {
+    UNSIGNED_16("Unsigned 16-bit", 1, 16),
+    SIGNED_16("Signed 16-bit", 1, 16),
+    HEX_16("Hex 16-bit", 1, 16),
+    UNSIGNED_24("U24 (unsigned 24-bit)", 2, 24),
+    SIGNED_24("S24 (signed 24-bit)", 2, 24),
+    UNSIGNED_32("Unsigned 32-bit", 2, 32),
+    SIGNED_32("Signed 32-bit", 2, 32),
+    FLOAT_32("Float 32-bit", 2, 32),
 }
 
 enum class WordOrder(val label: String) {
@@ -31,10 +33,12 @@ object RegisterValueCodec {
 
         return values.chunked(2).mapIndexed { index, words ->
             if (words.size < 2) {
-                DecodedRegister(index * 2, 1, words, "Incomplete 32-bit pair")
+                DecodedRegister(index * 2, 1, words, "Incomplete ${format.bitWidth}-bit pair")
             } else {
                 val bits = combine(words[0], words[1], wordOrder)
                 val text = when (format) {
+                    RegisterFormat.UNSIGNED_24 -> (bits.toUInt() and MAX_UNSIGNED_24).toString()
+                    RegisterFormat.SIGNED_24 -> signExtend24(bits).toString()
                     RegisterFormat.UNSIGNED_32 -> bits.toUInt().toString()
                     RegisterFormat.SIGNED_32 -> bits.toString()
                     RegisterFormat.FLOAT_32 -> Float.fromBits(bits).toString()
@@ -55,6 +59,12 @@ object RegisterValueCodec {
                     listOf(value and 0xFFFF)
                 }
                 RegisterFormat.HEX_16 -> listOf(parseHex(input, 4).toInt())
+                RegisterFormat.UNSIGNED_24 -> split(parseUnsigned(input, MAX_UNSIGNED_24), wordOrder)
+                RegisterFormat.SIGNED_24 -> {
+                    val value = input.toIntOrNull() ?: error("'$input' is not a signed 24-bit integer")
+                    require(value in MIN_SIGNED_24..MAX_SIGNED_24) { "'$input' is outside the signed 24-bit range" }
+                    split(value.toUInt() and MAX_UNSIGNED_24, wordOrder)
+                }
                 RegisterFormat.UNSIGNED_32 -> split(parseUnsigned(input, UInt.MAX_VALUE), wordOrder)
                 RegisterFormat.SIGNED_32 -> {
                     val value = input.toIntOrNull() ?: error("'$input' is not a signed 32-bit integer")
@@ -87,6 +97,11 @@ object RegisterValueCodec {
         return if (order == WordOrder.HIGH_WORD_FIRST) listOf(high, low) else listOf(low, high)
     }
 
+    private fun signExtend24(value: Int): Int {
+        val packed = value and MAX_UNSIGNED_24.toInt()
+        return if (packed and SIGN_BIT_24 != 0) packed or SIGN_EXTENSION_24 else packed
+    }
+
     private fun parseUnsigned(input: String, max: UInt): UInt {
         val value = if (input.startsWith("0x", ignoreCase = true)) {
             input.drop(2).toUIntOrNull(16)
@@ -102,4 +117,10 @@ object RegisterValueCodec {
         require(digits.length <= maxDigits) { "'$input' has too many hexadecimal digits" }
         return digits.toUIntOrNull(16) ?: error("'$input' is not hexadecimal")
     }
+
+    private const val MIN_SIGNED_24 = -8_388_608
+    private const val MAX_SIGNED_24 = 8_388_607
+    private const val SIGN_BIT_24 = 0x80_0000
+    private const val SIGN_EXTENSION_24 = -0x100_0000
+    private const val MAX_UNSIGNED_24 = 0xFF_FFFFu
 }

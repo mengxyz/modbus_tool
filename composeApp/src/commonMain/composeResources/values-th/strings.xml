@@ -19,6 +19,7 @@
     <string name="run">ใช้</string>
     <string name="value">ค่า</string>
     <string name="formatted_value">ค่าที่แปลงแล้ว</string>
+    <string name="remark">หมายเหตุ</string>
     <string name="actions">คำสั่ง</string>
     <string name="read">อ่าน</string>
     <string name="write">เขียน</string>
